@@ -1,0 +1,35 @@
+id,question,expected,predicted,fuzzy_score,pass
+1,What is the duration of maternity leave?,Maternity leave is granted for 26 weeks.,Maternity leave is granted for 26 weeks.,100.0,True
+2,How can an employee apply for short-term WFH?,Employees apply for short-term WFH via HRMS Remote Request tab.,Employees apply for short-term WFH via HRMS Remote Request tab.,100.0,True
+3,When can employees apply for long-term WFH?,Apply for long-term WFH in April and November.,Apply for long-term WFH in April and November.,100.0,True
+4,Who approves WFH requests?,BU Head and HRBP approve WFH applications.,BU Head and HRBP approve WFH applications.,100.0,True
+5,What devices must be used during WFH?,Use company laptops for WFH.,Use company laptops for WFH.,100.0,True
+6,How are employees monitored during WFH?,Monitoring via Hubstaff or ES Plus.,Monitoring via Hubstaff or ES Plus.,100.0,True
+7,Is camera-on mandatory for meetings?,Cameras are mandatory during meetings.,Cameras are mandatory during meetings.,100.0,True
+8,What is the core time during WFH?,WFH hours are 9:30 AM to 6:30 PM.,WFH hours are 9:30 AM to 6:30 PM.,100.0,True
+9,How are leaves marked in HRMS?,Leaves must be marked in HRMS.,Leaves must be marked in HRMS.,100.0,True
+10,Can employees reapply for WFH if location changes?,Reapplication required if employee changes location.,Reapplication required if employee changes location.,100.0,True
+11,What is the escalation process for WFH policy violations?,Escalation is to HRBP and Infosec.,Escalation is to HRBP and Infosec.,100.0,True
+12,What email to use for WFH support?,Contact wfh@company.com for help.,Contact wfh@company.com for help.,100.0,True
+13,What happens after WFH is approved?,Approved employees get email with instructions.,Approved employees get email with instructions.,100.0,True
+14,What platform is used to track WFH hours?,Track WFH using HRMS and ES Plus.,Track WFH using HRMS and ES Plus.,100.0,True
+15,What is required in WFH request?,Request must have justification and manager endorsement.,Request must have justification and manager endorsement.,100.0,True
+16,Are VPNs required during WFH?,VPN is mandatory for WFH.,VPN is mandatory for WFH.,100.0,True
+17,When should WFH requests be submitted?,Submit 4 days in advance for WFH.,Submit 4 days in advance for WFH.,100.0,True
+18,Can WFH be revoked?,WFH can be revoked due to policy violations.,WFH can be revoked due to policy violations.,100.0,True
+19,What is the policy on dual employment?,Dual employment leads to WFH cancellation.,Dual employment leads to WFH cancellation.,100.0,True
+20,Can new employees apply for WFH?,New joinees can't apply for WFH until confirmed.,New joinees can't apply for WFH until confirmed.,100.0,True
+21,What happens if an employee shares sensitive data via personal email?,Employees must not share sensitive data through personal email.,Employees must not share sensitive data through personal email.,100.0,True
+22,Can employees use public Wi-Fi while working remotely?,Use of public Wi-Fi requires VPN and endpoint protection.,Use of public Wi-Fi requires VPN and endpoint protection.,100.0,True
+23,What should an employee do if they miss marking attendance on HRMS?,Missed attendance should be regularized in HRMS within 2 days and communicated to the manager.,Missed attendance should be regularized in HRMS within 2 days and communicated to the manager.,100.0,True
+24,Is IT approval required before installing new software on a company laptop?,All new software installations on company laptops require IT and InfoSec approval.,All new software installations on company laptops require IT and InfoSec approval.,100.0,True
+25,What happens if an employee violates data classification policy?,Policy violation leads to disciplinary action including warnings or termination.,Policy violation leads to disciplinary action including warnings or termination.,100.0,True
+26,When are performance improvement plans (PIPs) initiated?,PIPs start after two poor quarters with HRBP involvement.,PIPs start after two poor quarters with HRBP involvement.,100.0,True
+27,Are personal laptops allowed for official use?,Only company-issued laptops are allowed.,Only company-issued laptops are allowed.,100.0,True
+28,How frequently is attendance data audited?,Bi-weekly HRIS audits are conducted.,Bi-weekly HRIS audits are conducted.,100.0,True
+29,Can employees decline On-Call duties?,On-Call is mandatory unless exemption is approved.,On-Call is mandatory unless exemption is approved.,100.0,True
+30,What is the expected internet speed for remote employees?,Minimum 50 Mbps speed required.,Minimum 50 Mbps speed required.,100.0,True
+31,What documentation is needed for emergency WFH requests?,HRMS entry and email within 2 days.,HRMS entry and email within 2 days.,100.0,True
+32,What is the minimum tenure required for long-term WFH eligibility?,3+ months and confirmation status required.,3+ months and confirmation status required.,100.0,True
+33,What is the approval timeline for WFH requests?,Submit WFH requests 7 days in advance.,Submit WFH requests 7 days in advance.,100.0,True
+34,Can WFH access be revoked due to inactivity?,"Yes, WFH access can be revoked for inactivity.","Yes, WFH access can be revoked for inactivity.",100.0,True

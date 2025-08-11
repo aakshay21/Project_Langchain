@@ -15,3 +15,15 @@ wikipedia
 arxiv
 langchainhub
 langchain-groq
+sentence_transformers
+groq
+cassio
+beautifulsoup4
+tf-keras
+ragas
+nltk
+peft
+rapidfuzz
+torch
+transformers
+pytest

@@ -1,0 +1,37 @@
+cd /Users/akshayjoshi/Desktop/Project_Langchain/internal_document_chatbot
+cat > README.md <<'EOF'
+# Internal Document Chatbot
+
+A Retrieval-First QA system trained on internal HR and company policy documents.  
+Uses RapidFuzz for fast matching, synonym/acronym expansion, and an optional LLM fallback.
+
+---
+
+## Features
+- **Fast retrieval** from a pre-loaded FAQ JSONL dataset.
+- **Synonym & acronym expansion** for better matching (e.g., WFH → Work From Home).
+- **Configurable thresholds** for strong/mid retrieval matches.
+- **LLM fallback** (optional) for cases where no strong match is found.
+- **CI-friendly mode** that skips model loading entirely.
+
+---
+
+## Requirements
+- Python 3.10+
+- PyTorch (with GPU support if using generation fallback)
+- [Requirements file](requirements.txt)
+
+---
+
+## Installation
+```bash
+# Clone repo
+git clone https://github.com/aakshay21/Project_Langchain.git
+cd internal_document_chatbot
+
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt

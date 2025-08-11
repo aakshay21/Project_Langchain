@@ -1,8 +1,14 @@
 # tests/test_eval.py
 import os
+import sys
 import importlib
 import re
 import pytest
+
+# --- Ensure project root is in sys.path ---
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 # --- Make tests fast & deterministic (retrieval-only) ---
 os.environ.setdefault("SKIP_MODEL_LOAD", "1")
@@ -18,7 +24,6 @@ def norm(s: str) -> str:
 
 # --- Sanity: dataset actually loaded ---
 def test_dataset_loaded_minimum():
-    # slightly hacky: indirectly verify by asking a known Q that must return non-empty
     ans = chat("How should I apply for WFH?")
     assert ans and ans != "Not specified in the policy dataset.", "Dataset not loaded or empty"
 
@@ -35,7 +40,7 @@ def test_exact_retrieval(q, exp):
     got = chat(q)
     assert norm(exp) in norm(got), f"\nQ: {q}\nExp: {exp}\nGot: {got}"
 
-# --- Paraphrase robustness (should still map to same answers) ---
+# --- Paraphrase robustness ---
 PARA = {
     "How should I apply for WFH?": [
         "What is the process to apply for WFH?",
@@ -59,15 +64,13 @@ def test_paraphrase_subset(orig_q, paraphrases):
     expected = chat(orig_q)
     for q in paraphrases:
         got = chat(q)
-        # Allow light flexibility: first 3 tokens of expected should appear
         anchor = " ".join(norm(expected).split()[:3])
         assert anchor in norm(got), f"\nOrig: {orig_q}\nExp: {expected}\nQ': {q}\nGot: {got}"
 
-# --- Edge case we saw earlier: awkward 'is it possible to WFH be revoked?' ---
+# --- Edge case: awkward wording ---
 def test_awkwark_revocation_phrase():
     q = "is it possible to WFH be revoked?"
     got = chat(q)
-    # Accept either the exact sentence or something that clearly conveys revocation
     ok = (
         "revoked" in norm(got) and "wfh" in norm(got)
     ) or ("policy violations" in norm(got))
