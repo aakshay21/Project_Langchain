@@ -1,4 +1,4 @@
-# inference.py — retrieval-first QA for TinyLlama + PEFT (CPU/MPS)
+# inference.py — retrieval-first QA for TinyLlama + PEFT (works on CPU/MPS)
 # Quiet startup + conditional resize + robust cleaner/guard
 
 import os, sys, json, re, warnings, logging
@@ -8,9 +8,15 @@ from transformers import AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 from rapidfuzz import process, fuzz
 
 # ========= EDIT THESE IF NEEDED =========
-ADAPTER_PATH    = os.getenv("ADAPTER_PATH", "/Users/akshayjoshi/Documents/Company_Policies_documents/outputs/mistral_finetuned")
-TRAIN_FILE      = os.getenv("TRAIN_FILE",  "/Users/akshayjoshi/Documents/Company_Policies_documents/dataset/fine_tune_dataset_text.jsonl")
-SKIP_MODEL_LOAD = os.getenv("SKIP_MODEL_LOAD", "0") == "1"   # allow CI to skip model
+ADAPTER_PATH = os.getenv(
+    "ADAPTER_PATH",
+    "/Users/akshayjoshi/Documents/Company_Policies_documents/outputs/mistral_finetuned",
+)
+TRAIN_FILE = os.getenv(
+    "TRAIN_FILE",
+    "/Users/akshayjoshi/Documents/Company_Policies_documents/dataset/fine_tune_dataset_text.jsonl",
+)
+SKIP_MODEL_LOAD = os.getenv("SKIP_MODEL_LOAD", "0") == "1"   # retrieval-only CI mode
 # =======================================
 
 # ---- knobs you can tweak without touching code below ----
@@ -67,10 +73,9 @@ def _load_once():
     model.to(DEVICE).eval()
     return model, tokenizer
 
+MODEL, TOKENIZER = (None, None)
 if not SKIP_MODEL_LOAD:
     MODEL, TOKENIZER = _load_once()
-else:
-    MODEL, TOKENIZER = None, None
 
 # -------------------- dataset cache ----------------------
 _Q_RE  = re.compile(r"###\s*Question\s*:(.*?)(?=###|\Z)", re.S | re.I)
@@ -184,7 +189,7 @@ def _answer_guard(user_q: str, ans: str) -> str:
         return "Not specified in the policy dataset."
     return ans
 
-# ------------------ intent normalization -----------------
+# ------------------ intent + synonym normalization -----------------
 ABBR = {
     r"\bWFH\b": "Work From Home",
     r"\bLWD\b": "Last Working Day",
@@ -196,27 +201,26 @@ def _expand_acronyms(q: str) -> str:
         q = re.sub(pat, repl, q, flags=re.IGNORECASE)
     return q.strip()
 
-# ------------------ synonym normalization ------------------
 def _normalize_synonyms(q: str) -> str:
+    # common paraphrases → canonical forms
     repls = [
         (r"\blong\s*duration\b", "long-term"),
         (r"\bextended\b", "long-term"),
         (r"\bsubmission window\b", "window"),
         (r"\bis it possible to\b", "can"),
-        # NEW:
-        (r"\bsubmit (?:a )?(wfh|work\s*from\s*home) request\b", "apply for work from home"),
-        (r"\bwithdrawn\b", "revoked"),
-        (r"\bcancelled\b", "revoked"),
-        (r"\bcanceled\b", "revoked"),
-        (r"\bprocess to apply\b", "apply"),
+        # NEW
+        (r"\bvideo\b", "camera"),
+        (r"\bwork\s*hours\b", "wfh hours"),
+        (r"\bremote work hours\b", "wfh hours"),
+        (r"\bmailbox\b", "email"),
     ]
     for pat, rep in repls:
         q = re.sub(pat, rep, flags=re.IGNORECASE, string=q)
 
+    # normalize awkward revoke phrasings
     q = re.sub(r"(?i)can\s+(wfh|work\s+from\s+home)\s+be\s+revoked\??", r"Can \1 be revoked?", q)
     q = re.sub(r"(?i)can\s+(.+?)\s+be\s+revoked\??", r"Can \1 be revoked?", q)
     return q
-
 
 def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
@@ -230,11 +234,15 @@ def _keyword_overlap_bonus(q: str, c: str) -> int:
     cset = set(re.findall(r"\b\w+\b", c.lower()))
     bonus = 0
     for k in {
-    "apply","application","reapply","re-apply","request","submit","process","steps",
-    "wfh","work","from","home","remote","remotework","hrms","portal","tool","system",
-    "when","timeline","window","cycle","april","november","month","months",
-    "revoke","revoked","revocation","withdraw","withdrawn","cancel","cancelled","canceled"}:
-
+        "apply","application","reapply","re-apply","request","submit","process","steps",
+        "wfh","work","from","home","remote","remotework","hrms","portal","tool","system",
+        "when","timeline","window","cycle","april","november","month","months",
+        "revoke","revoked","revocation","withdraw","cancel",
+        # NEW keywords
+        "camera","video","mandatory",
+        "track","log","record","capture","hours","timesheet",
+        "email","support","mail"
+    }:
         if k in qset and k in cset:
             bonus += 2
     return bonus
@@ -242,26 +250,43 @@ def _keyword_overlap_bonus(q: str, c: str) -> int:
 def _filter_by_intent(q: str, candidates: list[str]) -> list[str]:
     ql = q.lower()
 
-    wants_apply  = any(k in ql for k in ("apply","application","reapply","re-apply","request","submit","process","steps"))
-    wants_wfh    = ("wfh" in ql) or ("work from home" in ql) or ("remote work" in ql)
-    wants_when   = any(k in ql for k in ("when","by what time","timeline","window","cycle","month","april","november"))
-    wants_revoke = any(k in ql for k in ("revoke","revoked","revocation","withdraw","cancel"))
+    wants_apply = any(k in ql for k in ("apply","application","reapply","re-apply","request","submit","process","steps"))
+    wants_wfh   = ("wfh" in ql) or ("work from home" in ql) or ("remote work" in ql)
+    wants_when  = any(k in ql for k in ("when","by what time","timeline","window","cycle","month","april","november"))
+    wants_revoke= any(k in ql for k in ("revoke","revoked","revocation","withdraw","cancel"))
+    # NEW:
+    wants_camera = any(k in ql for k in ("camera","video"))
+    wants_track  = any(k in ql for k in ("track","log","record","capture")) and any(k in ql for k in ("hours","timesheet"))
+    wants_support= ("support" in ql) and ("email" in ql or "mail" in ql)
 
     keep = candidates
 
     if wants_apply and wants_wfh:
-        tmp = [c for c in candidates if any(k in c.lower() for k in ("apply","application","reapply","re-apply","request","submit","process","steps"))
-                                    and (("wfh" in c.lower()) or ("work from home" in c.lower()) or ("remote work" in c.lower()))]
-        if tmp:
-            keep = tmp
+        tmp = [c for c in keep if any(k in c.lower() for k in ("apply","application","reapply","re-apply","request","submit","process","steps"))
+                            and any(k in c.lower() for k in ("wfh","work from home","remote work"))]
+        if tmp: keep = tmp
 
     if wants_when:
         tmp = [c for c in keep if any(k in c.lower() for k in ("when","timeline","window","month","april","november"))]
-        if tmp:
-            keep = tmp
+        if tmp: keep = tmp
 
     if wants_revoke:
-        tmp = [c for c in keep if any(k in c.lower() for k in ("revoke","revoked","revocation","withdraw","withdrawn","cancel","cancelled","canceled"))]
+        tmp = [c for c in keep if any(k in c.lower() for k in ("revoke","revoked","revocation","withdraw","cancel"))]
+        if tmp: keep = tmp
+
+    # NEW — camera rule
+    if wants_camera:
+        tmp = [c for c in keep if "camera" in c.lower()]
+        if tmp: keep = tmp
+
+    # NEW — track/log/record/capture WFH hours
+    if wants_track:
+        tmp = [c for c in keep if ("track" in c.lower() or "hours" in c.lower() or "timesheet" in c.lower())]
+        if tmp: keep = tmp
+
+    # NEW — support email
+    if wants_support:
+        tmp = [c for c in keep if ("email" in c.lower() or "mail" in c.lower()) and "support" in c.lower()]
         if tmp: keep = tmp
 
     return keep
@@ -270,7 +295,7 @@ def _weighted_score(query: str, cand: str) -> int:
     ql, cl = query.lower(), cand.lower()
     base = _score_pair(query, cand) + _keyword_overlap_bonus(query, cand)
 
-    # intent boosts
+    # existing boosts...
     if any(k in cl for k in ("apply","application","reapply","re-apply","request","submit","process","steps")):
         base += 10
     if any(k in cl for k in ("hrms","portal","tool","system")):
@@ -281,39 +306,50 @@ def _weighted_score(query: str, cand: str) -> int:
     # temporal intent
     asks_when  = any(k in ql for k in ("when","by what time","timeline","window","cycle","month","april","november"))
     about_when = any(k in cl for k in ("when","timeline","window","month","april","november"))
-    if asks_when and about_when:
-        base += 12
-    if asks_when and not about_when:
-        base -= 6
+    if asks_when and about_when: base += 12
+    if asks_when and not about_when: base -= 6
 
     # reapply/location-change guard
     about_reapply = any(k in cl for k in ("reapply","re-apply","location changes","location change","change of location"))
     asks_reapply  = any(k in ql for k in ("reapply","re-apply","location change","change of location"))
-    if about_reapply and not asks_reapply:
-        base -= 18
+    if about_reapply and not asks_reapply: base -= 18
 
-    # revoke intent
+    # NEW: revoke intent
     asks_revoke  = any(k in ql for k in ("revoke","revoked","revocation","withdraw","cancel"))
     about_revoke = any(k in cl for k in ("revoke","revoked","revocation","withdraw","cancel"))
-    if asks_revoke and about_revoke:
-        base += 12
-    # If asking revoke but candidate is about approval/timeline, push it down
+    if asks_revoke and about_revoke: base += 12
     if asks_revoke and any(k in cl for k in ("approve","approved","approval","timeline","window","when")) and not about_revoke:
         base -= 10
 
-    # long/short term mismatches
+    # long/short term
     asks_long  = ("long-term" in ql) or ("long term" in ql)
     about_long = ("long-term" in cl) or ("long term" in cl)
-    if about_long and not asks_long:
-        base -= 12
+    if about_long and not asks_long: base -= 12
     asks_short  = ("short-term" in ql) or ("short term" in ql)
     about_short = ("short-term" in cl) or ("short term" in cl)
-    if about_short and not asks_short:
-        base -= 6
+    if about_short and not asks_short: base -= 6
 
-    # penalty for violation/escalation if not requested
+    # policy violation penalty (unless asked)
     if any(k in cl for k in ("violation","escalation","infosec","disciplinary")) and not any(k in ql for k in ("violation","escalation")):
         base -= 10
+
+    # NEW: camera rule
+    if any(k in ql for k in ("camera","video")) and "camera" in cl:
+        base += 10
+
+    # NEW: track/log/record/capture hours
+    if any(k in ql for k in ("track","log","record","capture")) and any(k in ql for k in ("hours","timesheet")):
+        if any(k in cl for k in ("track","hours","timesheet","hrms")):
+            base += 12
+        else:
+            base -= 6
+
+    # NEW: support email
+    if "support" in ql and ("email" in ql or "mail" in ql):
+        if any(k in cl for k in ("email","mail")) and "support" in cl:
+            base += 10
+        else:
+            base -= 4
 
     return base
 
@@ -327,7 +363,9 @@ def chat_with_model(query: str) -> str:
       4) Else rerank top-K with weighted scorer; if >= CUT_MID return it.
       5) Else: build a tiny few-shot from top-2 and generate a terse answer.
     """
-    device = DEVICE  # don't bind model/tokenizer yet
+    # Use globals but copy to locals for safety
+    global MODEL, TOKENIZER
+    model, tokenizer, device = MODEL, TOKENIZER, DEVICE
 
     # --- load dataset ---
     _load_faq()
@@ -341,15 +379,12 @@ def chat_with_model(query: str) -> str:
     chosen_score = None
 
     if _FAQ_QS:
-        # get top-K by plain fuzzy
         top_raw = process.extract(q_norm, _FAQ_QS, scorer=fuzz.QRatio, limit=TOP_K)
         top_questions = [m[0] for m in top_raw]
-        top_indices   = [m[2] for m in top_raw]  # index in _FAQ_QS
+        top_indices   = [m[2] for m in top_raw]
 
-        # optional intent filter
         filtered = _filter_by_intent(q_norm, top_questions)
         if filtered and len(filtered) < len(top_questions):
-            # map filtered back to indices (dedupe)
             seen = set()
             filt_pairs = []
             for q in filtered:
@@ -364,7 +399,6 @@ def chat_with_model(query: str) -> str:
         else:
             filt_pairs = list(zip(top_questions, top_indices))
 
-        # rerank with weighted score
         reranked = []
         for qcand, idx in filt_pairs:
             sc = _weighted_score(_normalize(q_norm), _normalize(qcand))
@@ -381,14 +415,21 @@ def chat_with_model(query: str) -> str:
         print("[retrieval] top =", [(m[0], m[1]) for m in top_matches[:3]])
         print("[retrieval] chosen =", (_FAQ_QS[chosen_idx][:80] + "…", chosen_score))
 
+    # --- thresholds (so CI doesn't go to generation path) ---
+    cut_strong = CUT_STRONG
+    cut_mid = CUT_MID
+    if SKIP_MODEL_LOAD:
+        cut_strong = min(CUT_STRONG, 80)
+        cut_mid = min(CUT_MID, 60)
+
     # --- decision: return dataset answer if confident ---
     if chosen_idx is not None and chosen_score is not None:
-        if chosen_score >= CUT_STRONG:
+        if chosen_score >= cut_strong:
             if DEBUG_RETRIEVAL:
                 print(f"[path] returning exact dataset answer (strong match: {chosen_score})")
             ans = _clean(_FAQ_AS[chosen_idx])
             return _answer_guard(q_norm, ans)
-        if chosen_score >= CUT_MID:
+        if chosen_score >= cut_mid:
             if DEBUG_RETRIEVAL:
                 print(f"[path] returning nearest dataset answer (mid-band: {chosen_score})")
             ans = _clean(_FAQ_AS[chosen_idx])
@@ -399,8 +440,7 @@ def chat_with_model(query: str) -> str:
         # In CI we don’t have the model; force safe fallback
         return "Not specified in the policy dataset."
 
-    # lazy-load if needed and rebind locals
-    global MODEL, TOKENIZER
+    # Lazy-load if needed, then refresh locals
     if MODEL is None or TOKENIZER is None:
         MODEL, TOKENIZER = _load_once()
     model, tokenizer = MODEL, TOKENIZER
@@ -434,7 +474,7 @@ def chat_with_model(query: str) -> str:
             **inputs,
             max_new_tokens=GEN_MAX_NEW,
             min_new_tokens=12,
-            do_sample=False,               # deterministic
+            do_sample=False,
             no_repeat_ngram_size=3,
             repetition_penalty=1.1,
             bad_words_ids=bad_words_ids,
@@ -452,6 +492,7 @@ def chat_with_model(query: str) -> str:
 
     ans = _clean(raw)
     return _answer_guard(q_norm, ans)
+
 
 # ------------------------- CLI ---------------------------
 if __name__ == "__main__":
