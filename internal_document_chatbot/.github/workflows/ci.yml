@@ -1,0 +1,43 @@
+name: Retrieval QA Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create mock dataset
+        run: |
+          mkdir -p tests
+          cat <<'EOF' > tests/mock_dataset.jsonl
+          {"text":"### Question: Is camera-on mandatory for meetings?\n\n### Answer: Cameras are mandatory during meetings."}
+          {"text":"### Question: What platform is used to track WFH hours?\n\n### Answer: Track WFH hours using HRMS Timesheet."}
+          {"text":"### Question: Can WFH be revoked?\n\n### Answer: WFH can be revoked due to policy violations."}
+          {"text":"### Question: When should WFH requests be submitted?\n\n### Answer: Submit WFH requests at least 3 working days in advance."}
+          EOF
+
+      - name: Run retrieval tests
+        env:
+          SKIP_MODEL_LOAD: "1"  # Don't load the actual model in CI
+          TRAIN_FILE: "tests/mock_dataset.jsonl"
+        run: |
+          pytest tests/test_retrieval.py -v
+
