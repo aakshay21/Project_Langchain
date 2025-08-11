@@ -4,3 +4,10 @@ __pycache__/
 
 rag/chroma/
 .env
+.env
+groq/
+huggingface/
+ragas/
+*.pkl
+*.faiss
+__pycache__/
