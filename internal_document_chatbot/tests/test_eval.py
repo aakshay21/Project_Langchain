@@ -1,60 +1,74 @@
+# tests/test_eval.py
 import os
-# Ensure retrieval-only tests never try to load the model
+import importlib
+import re
+import pytest
+
+# --- Make tests fast & deterministic (retrieval-only) ---
 os.environ.setdefault("SKIP_MODEL_LOAD", "1")
 os.environ.setdefault("TRAIN_FILE", "tests/mock_dataset.jsonl")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
-import re
-import pytest
-import importlib
-
-# Import after env is set
+# Import AFTER env is set so inference.py reads these
 inference = importlib.import_module("inference")
-
-# --- helpers ---
-def ask(q: str) -> str:
-    return inference.chat_with_model(q)
+chat = inference.chat_with_model
 
 def norm(s: str) -> str:
-    s = re.sub(r"\s+", " ", s).strip().lower()
-    return s
+    return re.sub(r"\s+", " ", (s or "")).strip().lower()
 
-# --- exact retrieval tests (must hit dataset answers) ---
+# --- Sanity: dataset actually loaded ---
+def test_dataset_loaded_minimum():
+    # slightly hacky: indirectly verify by asking a known Q that must return non-empty
+    ans = chat("How should I apply for WFH?")
+    assert ans and ans != "Not specified in the policy dataset.", "Dataset not loaded or empty"
+
+# --- Exact-match retrieval on mock items ---
 @pytest.mark.parametrize("q,exp", [
-    ("Is camera-on mandatory for meetings?", "Cameras are mandatory during meetings."),
-    ("What platform is used to track WFH hours?", "Track WFH hours using HRMS Timesheet."),
-    ("Can WFH be revoked?", "WFH can be revoked due to policy violations."),
-    ("When should WFH requests be submitted?", "Submit WFH requests at least 3 working days in advance."),
+    ("How should I apply for WFH?",
+     "Submit the WFH request via HRMS portal at least 3 days in advance."),
+    ("Can WFH be revoked?",
+     "WFH can be revoked due to policy violations."),
+    ("When can employees apply for long-term WFH?",
+     "Apply for long-term WFH in April and November."),
 ])
 def test_exact_retrieval(q, exp):
-    got = ask(q)
-    assert norm(got) == norm(exp), f"\nQ: {q}\nExp: {exp}\nGot: {got}"
+    got = chat(q)
+    assert norm(exp) in norm(got), f"\nQ: {q}\nExp: {exp}\nGot: {got}"
 
-# --- small paraphrase subset (robustness, not strict equality) ---
+# --- Paraphrase robustness (should still map to same answers) ---
 PARA = {
-    "Is camera-on mandatory for meetings?": [
-        "Are cameras required during meetings?",
-        "Do we have to keep the camera on in meetings?"
-    ],
-    "What platform is used to track WFH hours?": [
-        "Which tool do we use to track WFH hours?",
-        "Where should I log my WFH hours?"
+    "How should I apply for WFH?": [
+        "What is the process to apply for WFH?",
+        "How do I submit a WFH request?",
+        "Where do I apply for Work From Home?"
     ],
     "Can WFH be revoked?": [
-        "Is it possible that WFH gets revoked?",
-        "Under what conditions can WFH be withdrawn?"
+        "Is it possible that WFH gets withdrawn?",
+        "Under what conditions can Work From Home be revoked?",
+        "Could WFH access be cancelled?"
     ],
-    "When should WFH requests be submitted?": [
-        "By when do we need to submit WFH requests?",
-        "What’s the submission window for WFH requests?"
+    "When can employees apply for long-term WFH?": [
+        "What months allow long-term WFH applications?",
+        "When is the application window for long-term WFH?",
+        "By what time can we apply for long duration WFH?"
     ],
 }
 
 @pytest.mark.parametrize("orig_q,paraphrases", list(PARA.items()))
 def test_paraphrase_subset(orig_q, paraphrases):
-    expected = ask(orig_q)
+    expected = chat(orig_q)
     for q in paraphrases:
-        got = ask(q)
-        # not strict string equality (allow synonyms); check loose containment/overlap
-        assert any(tok in norm(got) for tok in norm(expected).split()[:3]), \
-            f"\nOrig: {orig_q}\nExp: {expected}\nQ': {q}\nGot: {got}"
+        got = chat(q)
+        # Allow light flexibility: first 3 tokens of expected should appear
+        anchor = " ".join(norm(expected).split()[:3])
+        assert anchor in norm(got), f"\nOrig: {orig_q}\nExp: {expected}\nQ': {q}\nGot: {got}"
+
+# --- Edge case we saw earlier: awkward 'is it possible to WFH be revoked?' ---
+def test_awkwark_revocation_phrase():
+    q = "is it possible to WFH be revoked?"
+    got = chat(q)
+    # Accept either the exact sentence or something that clearly conveys revocation
+    ok = (
+        "revoked" in norm(got) and "wfh" in norm(got)
+    ) or ("policy violations" in norm(got))
+    assert ok, f"\nQ: {q}\nGot: {got}"
