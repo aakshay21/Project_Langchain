@@ -11,3 +11,7 @@ ragas/
 *.pkl
 *.faiss
 __pycache__/
+
+# secrets
+.env
+*.env
