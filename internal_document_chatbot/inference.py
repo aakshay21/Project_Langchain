@@ -7,6 +7,19 @@ from peft import AutoPeftModelForCausalLM
 from transformers import AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 from rapidfuzz import process, fuzz
 
+
+# --- Command Detection Regex ---
+_CMD_PAT = re.compile(r"""
+^\s*(pytest|pip|python|git|ls|cd|export|set|echo|cat|nano|vi|vim|code|make)\b|
+\bSKIP_MODEL_LOAD\b|[;$|>&]|--?\w+=
+""", re.I | re.X)
+
+def _looks_like_command(q: str) -> bool:
+    """Detects if the input looks like a shell/system command instead of a policy question."""
+    return bool(_CMD_PAT.search(q)) and "?" not in q
+
+
+
 # ========= EDIT THESE IF NEEDED =========
 ADAPTER_PATH = os.getenv(
     "ADAPTER_PATH",
@@ -202,25 +215,29 @@ def _expand_acronyms(q: str) -> str:
     return q.strip()
 
 def _normalize_synonyms(q: str) -> str:
-    # common paraphrases → canonical forms
     repls = [
         (r"\blong\s*duration\b", "long-term"),
         (r"\bextended\b", "long-term"),
         (r"\bsubmission window\b", "window"),
         (r"\bis it possible to\b", "can"),
-        # NEW
-        (r"\bvideo\b", "camera"),
-        (r"\bwork\s*hours\b", "wfh hours"),
-        (r"\bremote work hours\b", "wfh hours"),
-        (r"\bmailbox\b", "email"),
+        # NEW: unify “log/record/capture” -> track, “tool” -> platform
+        (r"\blog\b", "track"),
+        (r"\brecord\b", "track"),
+        (r"\bcapture\b", "track"),
+        (r"\btool\b", "platform"),
+        #new
+                (r"(?i)\bgets\s+withdrawn\b", "be revoked"),
+        (r"(?i)\bbe\s+withdrawn\b", "be revoked"),
+        (r"(?i)\bwithdrawn\b", "revoked"),
     ]
     for pat, rep in repls:
         q = re.sub(pat, rep, flags=re.IGNORECASE, string=q)
 
-    # normalize awkward revoke phrasings
+    # existing revoke canonicalization…
     q = re.sub(r"(?i)can\s+(wfh|work\s+from\s+home)\s+be\s+revoked\??", r"Can \1 be revoked?", q)
     q = re.sub(r"(?i)can\s+(.+?)\s+be\s+revoked\??", r"Can \1 be revoked?", q)
     return q
+
 
 def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
@@ -241,29 +258,31 @@ def _keyword_overlap_bonus(q: str, c: str) -> int:
         # NEW keywords
         "camera","video","mandatory",
         "track","log","record","capture","hours","timesheet",
-        "email","support","mail"
+        "email","support","mail","revoke","revoked","revocation","withdraw","withdrawn","cancel","cancelled","canceled",
+    "terminate","terminated","termination","rescind","rescinded","suspend","suspended"
+
     }:
         if k in qset and k in cset:
             bonus += 2
     return bonus
-
 def _filter_by_intent(q: str, candidates: list[str]) -> list[str]:
     ql = q.lower()
 
     wants_apply = any(k in ql for k in ("apply","application","reapply","re-apply","request","submit","process","steps"))
     wants_wfh   = ("wfh" in ql) or ("work from home" in ql) or ("remote work" in ql)
     wants_when  = any(k in ql for k in ("when","by what time","timeline","window","cycle","month","april","november"))
-    wants_revoke= any(k in ql for k in ("revoke","revoked","revocation","withdraw","cancel"))
-    # NEW:
-    wants_camera = any(k in ql for k in ("camera","video"))
-    wants_track  = any(k in ql for k in ("track","log","record","capture")) and any(k in ql for k in ("hours","timesheet"))
-    wants_support= ("support" in ql) and ("email" in ql or "mail" in ql)
+    wants_revoke = any(k in ql for k in (
+    "revoke","revoked","revocation","withdraw","withdrawn","cancel","cancelled","canceled",
+    "terminate","terminated","termination","rescind","rescinded","suspend","suspended"
+))
+
+    wants_track = (("track" in ql) and any(k in ql for k in ("hours","timesheet","hrms")))
 
     keep = candidates
 
     if wants_apply and wants_wfh:
-        tmp = [c for c in keep if any(k in c.lower() for k in ("apply","application","reapply","re-apply","request","submit","process","steps"))
-                            and any(k in c.lower() for k in ("wfh","work from home","remote work"))]
+        tmp = [c for c in candidates if any(k in c.lower() for k in ("apply","application","reapply","re-apply","request","submit","process","steps"))
+               and (("wfh" in c.lower()) or ("work from home" in c.lower()) or ("remote work" in c.lower()))]
         if tmp: keep = tmp
 
     if wants_when:
@@ -274,19 +293,9 @@ def _filter_by_intent(q: str, candidates: list[str]) -> list[str]:
         tmp = [c for c in keep if any(k in c.lower() for k in ("revoke","revoked","revocation","withdraw","cancel"))]
         if tmp: keep = tmp
 
-    # NEW — camera rule
-    if wants_camera:
-        tmp = [c for c in keep if "camera" in c.lower()]
-        if tmp: keep = tmp
-
-    # NEW — track/log/record/capture WFH hours
+    # NEW: prefer “track/log hours / HRMS / timesheet” entries
     if wants_track:
-        tmp = [c for c in keep if ("track" in c.lower() or "hours" in c.lower() or "timesheet" in c.lower())]
-        if tmp: keep = tmp
-
-    # NEW — support email
-    if wants_support:
-        tmp = [c for c in keep if ("email" in c.lower() or "mail" in c.lower()) and "support" in c.lower()]
+        tmp = [c for c in keep if any(k in c.lower() for k in ("track","hours","timesheet","hrms","record","capture","log"))]
         if tmp: keep = tmp
 
     return keep
@@ -295,7 +304,7 @@ def _weighted_score(query: str, cand: str) -> int:
     ql, cl = query.lower(), cand.lower()
     base = _score_pair(query, cand) + _keyword_overlap_bonus(query, cand)
 
-    # existing boosts...
+    # existing boosts…
     if any(k in cl for k in ("apply","application","reapply","re-apply","request","submit","process","steps")):
         base += 10
     if any(k in cl for k in ("hrms","portal","tool","system")):
@@ -314,12 +323,16 @@ def _weighted_score(query: str, cand: str) -> int:
     asks_reapply  = any(k in ql for k in ("reapply","re-apply","location change","change of location"))
     if about_reapply and not asks_reapply: base -= 18
 
-    # NEW: revoke intent
-    asks_revoke  = any(k in ql for k in ("revoke","revoked","revocation","withdraw","cancel"))
-    about_revoke = any(k in cl for k in ("revoke","revoked","revocation","withdraw","cancel"))
+    # revoke
+    asks_revoke = any(k in ql for k in ("revoke","revoked","revocation","withdraw","withdrawn","cancel","cancelled","canceled",
+                                        "terminate","terminated","termination","rescind","rescinded","suspend","suspended"))
+    about_revoke = any(k in cl for k in ("revoke","revoked","revocation","withdraw","withdrawn","cancel","cancelled","canceled",
+                                         "terminate","terminated","termination","rescind","rescinded","suspend","suspended"))
     if asks_revoke and about_revoke: base += 12
-    if asks_revoke and any(k in cl for k in ("approve","approved","approval","timeline","window","when")) and not about_revoke:
-        base -= 10
+    if asks_revoke and any(k in cl for k in ("approve","approved","approval","timeline","window","when",
+                                          "apply","application","request","submit","process","steps")) and not about_revoke:
+        base -= 18  # stronger push-away from apply/submit when user asks revoke
+
 
     # long/short term
     asks_long  = ("long-term" in ql) or ("long term" in ql)
@@ -333,18 +346,19 @@ def _weighted_score(query: str, cand: str) -> int:
     if any(k in cl for k in ("violation","escalation","infosec","disciplinary")) and not any(k in ql for k in ("violation","escalation")):
         base -= 10
 
-    # NEW: camera rule
+    # camera rule
     if any(k in ql for k in ("camera","video")) and "camera" in cl:
-        base += 10
+        base += 12  # slightly stronger
 
-    # NEW: track/log/record/capture hours
-    if any(k in ql for k in ("track","log","record","capture")) and any(k in ql for k in ("hours","timesheet")):
-        if any(k in cl for k in ("track","hours","timesheet","hrms")):
-            base += 12
-        else:
-            base -= 6
+    # TRACK HOURS intent — make this decisive
+    asks_track = (("track" in ql) or ("log" in ql) or ("record" in ql) or ("capture" in ql)) and any(k in ql for k in ("hours","timesheet","hrms"))
+    about_track = any(k in cl for k in ("track","log","record","capture","hours","timesheet","hrms"))
+    if asks_track and about_track:
+        base += 22
+    if asks_track and any(k in cl for k in ("apply","request","submit","approval","approve","approved")) and not about_track:
+        base -= 18
 
-    # NEW: support email
+    # support email
     if "support" in ql and ("email" in ql or "mail" in ql):
         if any(k in cl for k in ("email","mail")) and "support" in cl:
             base += 10
@@ -352,6 +366,8 @@ def _weighted_score(query: str, cand: str) -> int:
             base -= 4
 
     return base
+
+
 
 # -------------------- main QA function -------------------
 def chat_with_model(query: str) -> str:
@@ -460,12 +476,14 @@ def chat_with_model(query: str) -> str:
 
     inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False).to(device)
 
+
     bad_words = [
-        "\n###", "Examples:", "Dear ", "- ", "• ", "1.", "2.", "3.",
-        "Applicable to:", "Job Title:", "Department:", "Location:", "Approved by:",
-        "HR Manager", "Note:", "Sincerely", "Regards", "Template", "Form", "Policy Name:",
-        "## ", "### ", "Question:", "Answer:"
-    ]
+    "```", "\n###", "Examples:", "Dear ", "- ", "• ", "1.", "2.", "3.",
+    "Applicable to:", "Job Title:", "Department:", "Location:", "Approved by:",
+    "HR Manager", "Note:", "Sincerely", "Regards", "Template", "Form", "Policy Name:",
+    "## ", "### ", "Question:", "Answer:"
+]
+
     bad_words_ids = [tokenizer(b, add_special_tokens=False).input_ids for b in bad_words]
     stopping = StoppingCriteriaList([StopOnStrings(tokenizer, ["\n###", "### ", "## ", "Dear "])])
 
@@ -501,4 +519,7 @@ if __name__ == "__main__":
         q = input("\n🔎 Ask a policy question (or type 'exit'): ")
         if q.lower() in ("exit", "quit"):
             break
+        if _looks_like_command(q):
+            print("\n🤖 Answer:\nPlease ask a policy question (e.g., “How do I apply for WFH?”). Type 'exit' to quit.")
+            continue
         print("\n🤖 Answer:\n" + chat_with_model(q))
